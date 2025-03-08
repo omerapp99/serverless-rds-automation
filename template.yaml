@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless RDS Cluster Automation
+
+Parameters:
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub token with repo scope to create PRs
+
+Resources:
+  # API Gateway
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      EndpointConfiguration:
+        Type: REGIONAL
+      Auth:
+        DefaultAuthorizer: AWS_IAM
+      DefinitionBody:
+        swagger: '2.0'
+        info:
+          title: RDS Cluster API
+        paths:
+          /rds-request:
+            post:
+              produces:
+                - application/json
+              responses:
+                '202':
+                  description: "202 response"
+                  schema:
+                    type: object
+                '400':
+                  description: "400 response"
+                  schema:
+                    type: object
+                '500':
+                  description: "500 response"
+                  schema:
+                    type: object
+              x-amazon-apigateway-integration:
+                credentials: !GetAtt ApiGatewayRole.Arn
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:sns:path//
+                responses:
+                  "2\\d{2}":
+                    statusCode: '202'
+                    responseTemplates:
+                      application/json: |
+                        {
+                          "message": "RDS cluster request submitted successfully",
+                          "requestId": "$context.requestId",
+                          "messageId": "$input.path('$.PublishResponse.PublishResult.MessageId')"
+                        }
+                  "4\\d{2}":
+                    statusCode: '400'
+                    responseTemplates:
+                      application/json: |
+                        {
+                          "message": "Bad request",
+                          "error": "$input.path('$.Error.Message')",
+                          "code": "$input.path('$.Error.Code')",
+                          "requestId": "$context.requestId"
+                        }
+                  default:
+                    statusCode: '500'
+                    responseTemplates:
+                      application/json: |
+                        {
+                          "message": "Internal server error",
+                          "error": "$input.path('$.Error.Message')",
+                          "requestId": "$context.requestId"
+                        }
+                requestParameters:
+                  integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+                passthroughBehavior: never
+                httpMethod: POST
+                type: aws
+                requestTemplates:
+                  application/json: !Join
+                    - ''
+                    - - 'Action=Publish'
+                      - '&Version=2010-03-31'
+                      - '&TopicArn='
+                      - !Ref RdsRequestTopic
+                      - '&Message=$util.urlEncode($input.body)'
+                      - '&MessageAttributes.entry.1.Name=RequestType'
+                      - '&MessageAttributes.entry.1.Value.DataType=String'
+                      - '&MessageAttributes.entry.1.Value.StringValue=RdsClusterRequest'
+
+  # API Gateway Role (to allow publishing to SNS)
+  ApiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+      Policies:
+        - PolicyName: ApiGatewaySnsPublish
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref RdsRequestTopic
+
+  # SNS Topic
+  RdsRequestTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: RdsRequestTopic
+
+  # SQS Queue
+  RdsRequestQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 300
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RdsRequestDLQ.Arn
+        maxReceiveCount: 3
+
+  # Dead Letter Queue
+  RdsRequestDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  # Subscription between SNS and SQS
+  RdsRequestSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      TopicArn: !Ref RdsRequestTopic
+      Endpoint: !GetAtt RdsRequestQueue.Arn
+
+  # SQS Queue Policy (allow SNS to send messages)
+  SnsToSqsPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt RdsRequestQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref RdsRequestTopic
+      Queues:
+        - !Ref RdsRequestQueue
+
+  # Processor Lambda Function
+  ProcessorLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./processor_lambda/
+      Handler: app.lambda_handler
+      Runtime: python3.10
+      Timeout: 300
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt RdsRequestQueue.QueueName
+        - SSMParameterReadPolicy:
+            ParameterName: '*'
+      Environment:
+        Variables:
+          GITHUB_TOKEN: !Ref GitHubToken
+          GITHUB_REPO: omerapp99/test
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt RdsRequestQueue.Arn
+            BatchSize: 1
+
+  RdsAutoCleanupLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./rds_auto_cleanup_lambda/
+      Handler: app.lambda_handler
+      Runtime: python3.10
+      Timeout: 600  # 10 minutes timeout
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # CloudWatch metrics read access
+            - Effect: Allow
+              Action:
+                - cloudwatch:GetMetricStatistics
+                - cloudwatch:ListMetrics
+              Resource: '*'
+            
+            # RDS read and delete access
+            - Effect: Allow
+              Action:
+                - rds:DescribeDBInstances
+                - rds:DeleteDBInstance
+                - rds:CreateDBSnapshot
+              Resource: '*'
+            
+            # GitHub access via SSM parameter
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: '*'
+
+      Environment:
+        Variables:
+          GITHUB_TOKEN: !Ref GitHubToken
+          GITHUB_REPO: omerapp99/test
+
+  # CloudWatch Events Rule to trigger Lambda daily
+  RdsAutoCleanupScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: 'Trigger RDS Auto-Cleanup Lambda daily'
+      ScheduleExpression: 'rate(1 day)'  # Runs every day
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt RdsAutoCleanupLambdaFunction.Arn
+          Id: DailyRdsAutoCleanup
+
+  # Permission to allow CloudWatch Events to invoke the Lambda
+  PermissionForEventsToInvokeRdsAutoCleanupLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RdsAutoCleanupLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RdsAutoCleanupScheduleRule.Arn
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/rds-request
+  SnsTopicArn:
+    Description: SNS Topic ARN
+    Value: !Ref RdsRequestTopic
+  SqsQueueUrl:
+    Description: SQS Queue URL
+    Value: !Ref RdsRequestQueue

@@ -1,0 +1,64 @@
+version: 2.1
+
+orbs:
+  aws-cli: circleci/aws-cli@3.1
+  terraform: circleci/terraform@3.2.1
+
+jobs:
+  deploy-sam-stack:
+    docker:
+      - image: cimg/python:3.10.0
+    steps:
+      - checkout
+      - aws-cli/setup
+      - run:
+          name: Install AWS SAM CLI
+          command: |
+            pip install aws-sam-cli
+      - run:
+          name: Build SAM application
+          command: |
+            sam build
+      - run:
+          name: Deploy SAM application
+          command: |
+            sam deploy --stack-name rds-automation \
+              --parameter-overrides GitHubToken=${GITHUB_TOKEN} \
+              --no-confirm-changeset \
+              --no-fail-on-empty-changeset \
+              --capabilities CAPABILITY_IAM \
+              --resolve-s3
+
+  apply-terraform:
+    docker:
+      - image: cimg/python:3.10.0
+    steps:
+      - checkout
+      - aws-cli/setup
+      - terraform/install:
+          terraform_version: 1.0.0
+      - run:
+          name: Initialize Terraform
+          command: |
+            cd terraform
+            terraform init
+      - run:
+          name: Apply Terraform changes
+          command: |
+            cd terraform
+            terraform apply -auto-approve
+
+workflows:
+  version: 2
+  deploy:
+    jobs:
+      - deploy-sam-stack:
+          filters:
+            branches:
+              only: main
+      - apply-terraform:
+          requires:
+            - deploy-sam-stack
+          filters:
+            branches:
+              only: main
