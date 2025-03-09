@@ -23,7 +23,11 @@ jobs:
           name: Deploy SAM application
           command: |
             sam deploy --stack-name rds-automation \
-              --parameter-overrides GitHubToken=${GITHUB_TOKEN} \
+              --parameter-overrides \
+                GitHubToken=${GITHUB_TOKEN} \
+                CustomDomainName=${CUSTOM_DOMAIN_NAME} \
+                CustomDomainCertificateArn=${CUSTOM_DOMAIN_CERTIFICATE_ARN} \
+                HostedZoneId=${HOSTED_ZONE_ID} \
               --no-confirm-changeset \
               --no-fail-on-empty-changeset \
               --capabilities CAPABILITY_IAM \

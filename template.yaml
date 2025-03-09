@@ -1,21 +1,36 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Serverless RDS Cluster Automation
+Description: Serverless RDS Cluster Automation with Custom Domain for API Gateway
 
 Parameters:
   GitHubToken:
     Type: String
     NoEcho: true
     Description: GitHub token with repo scope to create PRs
+  CustomDomainName:
+    Type: String
+    Description: "The custom domain name for the API (e.g., api.example.com)"
+  CustomDomainCertificateArn:
+    Type: String
+    Description: "The ARN of the ACM certificate for the custom domain"
+  HostedZoneId:
+    Type: String
+    Description: "The Route53 Hosted Zone ID for the custom domain"
 
 Resources:
-  # API Gateway
+  # API Gateway with Custom Domain Configuration
   ApiGateway:
     Type: AWS::Serverless::Api
     Properties:
       StageName: Prod
       EndpointConfiguration:
         Type: REGIONAL
+      Domain:
+        DomainName: !Ref CustomDomainName
+        CertificateArn: !Ref CustomDomainCertificateArn
+        Route53:
+          HostedZoneId: !Ref HostedZoneId
+          EvaluateTargetHealth: false
       Auth:
         DefaultAuthorizer: AWS_IAM
       DefinitionBody:
@@ -198,7 +213,6 @@ Resources:
                 - cloudwatch:GetMetricStatistics
                 - cloudwatch:ListMetrics
               Resource: '*'
-            
             # RDS read and delete access
             - Effect: Allow
               Action:
@@ -206,13 +220,11 @@ Resources:
                 - rds:DeleteDBInstance
                 - rds:CreateDBSnapshot
               Resource: '*'
-            
             # GitHub access via SSM parameter
             - Effect: Allow
               Action:
                 - ssm:GetParameter
               Resource: '*'
-
       Environment:
         Variables:
           GITHUB_TOKEN: !Ref GitHubToken
@@ -240,8 +252,8 @@ Resources:
 
 Outputs:
   ApiEndpoint:
-    Description: API Gateway endpoint URL
-    Value: !Sub https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/rds-request
+    Description: "Custom domain API endpoint URL"
+    Value: !Sub "https://${CustomDomainName}/"
   SnsTopicArn:
     Description: SNS Topic ARN
     Value: !Ref RdsRequestTopic

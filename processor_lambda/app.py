@@ -11,7 +11,7 @@ logger.setLevel(logging.INFO)
 
 # GitHub configuration
 github_token = os.environ.get('GITHUB_TOKEN')
-github_repo_name = os.environ.get('GITHUB_REPO')  # Format: username/repo
+github_repo_name = os.environ.get('GITHUB_REPO')
 
 def lambda_handler(event, context):
     try:
