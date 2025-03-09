@@ -54,7 +54,9 @@ The solution consists of the following components:
    - `AWS_SECRET_ACCESS_KEY`: Your AWS secret access key
    - `AWS_DEFAULT_REGION`: Your preferred AWS region (e.g., eu-central-1)
    - `GITHUB_TOKEN`: Your GitHub personal access token
-
+   - `CUSTOM_DOMAIN_NAME`: Your custom domain name
+   - `CUSTOM_DOMAIN_CERTIFICATE_ARN`: Your ACM certifacte ARN
+   - `HOSTED_ZONE_ID`: Your Route53 hosted zone id of the domain.
 4. **Update AWS Region and Repository Information**:
    - Edit `samconfig.toml` to set your preferred AWS region
    - Update the GitHub repository name in `template.yaml` (look for `GITHUB_REPO` environment variable)
