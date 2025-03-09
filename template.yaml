@@ -216,7 +216,7 @@ Resources:
       Environment:
         Variables:
           GITHUB_TOKEN: !Ref GitHubToken
-          GITHUB_REPO: omerapp99/test
+          GITHUB_REPO: omerapp99/serverless-rds-automation
 
   # CloudWatch Events Rule to trigger Lambda daily
   RdsAutoCleanupScheduleRule:
